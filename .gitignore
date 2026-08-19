@@ -1,0 +1,8 @@
+
+.env
+.env.production
+.env.my-store-prd
+.firebase
+.env.my-store-prd
+/node_modules
+/dist
