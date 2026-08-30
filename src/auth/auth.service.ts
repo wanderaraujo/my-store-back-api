@@ -31,6 +31,7 @@ export class AuthService {
     email: string,
     displayName: string,
     photoURL: string,
+    emailVerified: boolean,
   ) {
     const normalizedEmail = email.toLowerCase();
 
@@ -70,17 +71,71 @@ export class AuthService {
         return user;
       }
 
-      user = await this.userModel.create({
-        firebaseUid,
-        email: normalizedEmail,
-        displayName,
-        photoURL,
-        role: Role.OWNER,
-      });
-      this.logger.log(
-        `Novo usuário criado: firebaseUid=${firebaseUid} | email=${normalizedEmail}`,
-      );
-    } else if (user.businessId) {
+      // Same email may already have an active account under a different
+      // Firebase identity (e.g. signed up with password, later signed in
+      // with Google without linking providers). Adopt that account instead
+      // of creating a duplicate — only when Firebase verified the incoming
+      // email, so an unverified signup can't hijack someone else's account.
+      const existingByEmail = emailVerified
+        ? await this.userModel
+            .findOne({ email: normalizedEmail, isPending: false })
+            .populate('businessId')
+            .exec()
+        : null;
+
+      if (existingByEmail) {
+        user = await this.userModel
+          .findByIdAndUpdate(
+            existingByEmail._id,
+            { firebaseUid },
+            { new: true },
+          )
+          .populate('businessId')
+          .exec();
+        this.logger.log(
+          `Conta adotada por novo provedor: firebaseUid=${firebaseUid} | email=${normalizedEmail} | userId=${existingByEmail._id.toString()}`,
+        );
+      } else {
+        try {
+          user = await this.userModel.create({
+            firebaseUid,
+            email: normalizedEmail,
+            displayName,
+            photoURL,
+            role: Role.OWNER,
+          });
+          this.logger.log(
+            `Novo usuário criado: firebaseUid=${firebaseUid} | email=${normalizedEmail}`,
+          );
+        } catch (err) {
+          // Concurrent requests for the same brand-new firebaseUid can both
+          // reach here before either commits; the unique index rejects the
+          // loser. Treat it as a benign race and load what the winner wrote.
+          if ((err as { code?: number }).code === 11000) {
+            user = await this.userModel
+              .findOne({ firebaseUid })
+              .populate('businessId')
+              .exec();
+          } else {
+            throw err;
+          }
+        }
+      }
+    }
+
+    if (user && displayName && user.displayName !== displayName) {
+      // The client may send the freshly-typed name before the Firebase ID
+      // token claim catches up (createUserWithEmailAndPassword's
+      // onAuthStateChanged can race ahead of updateProfile), so the very
+      // first login might have created this user with no name yet. Heal it
+      // here instead of trusting only the create-time value.
+      user = await this.userModel
+        .findByIdAndUpdate(user._id, { displayName }, { new: true })
+        .populate('businessId')
+        .exec();
+    }
+
+    if (user?.businessId) {
       // Re-apply custom claims on every login for users that already have a business.
       // This auto-heals tokens whose claims are stale or missing (e.g. after manual DB edits).
       // businessId may be a populated Business document — extract _id explicitly.

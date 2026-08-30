@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core';
 import * as admin from 'firebase-admin';
 
 export const IS_PUBLIC_KEY = 'isPublic';
+export const IS_AUTH_SETUP_ROUTE_KEY = 'isAuthSetupRoute';
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
@@ -24,11 +25,18 @@ export class FirebaseAuthGuard implements CanActivate {
 
     if (isPublic) return true;
 
+    const isAuthSetupRoute = this.reflector.getAllAndOverride<boolean>(
+      IS_AUTH_SETUP_ROUTE_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+
     const request = context.switchToHttp().getRequest();
     const token = this.extractToken(request);
 
     if (!token) {
-      this.logger.warn(`Requisição sem token: ${request.method} ${request.url}`);
+      this.logger.warn(
+        `Requisição sem token: ${request.method} ${request.url}`,
+      );
       throw new UnauthorizedException('Token não fornecido');
     }
 
@@ -36,13 +44,13 @@ export class FirebaseAuthGuard implements CanActivate {
       const decoded = await admin.auth().verifyIdToken(token);
       request.user = decoded;
 
-      // Routes under /auth/ set up the user/business — they don't need businessId in claims yet.
-      const isAuthRoute = /^\/v1\/auth(\/|$)/.test(request.url);
-      if (!isPublic && !isAuthRoute && !decoded.businessId) {
+      if (!isAuthSetupRoute && !decoded.businessId) {
         this.logger.warn(
           `Token sem businessId nas claims: ${request.method} ${request.url} | uid=${decoded.uid}`,
         );
-        throw new UnauthorizedException('Sessão desatualizada — faça login novamente');
+        throw new UnauthorizedException(
+          'Sessão desatualizada — faça login novamente',
+        );
       }
 
       return true;
