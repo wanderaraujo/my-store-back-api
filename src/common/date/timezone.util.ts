@@ -33,8 +33,22 @@ export function resolveTimeZone(tz: unknown): string {
  * Deslocamento (ms) de `tz` em relacao ao UTC no instante `date`.
  * Ex.: America/Sao_Paulo -> -10800000 (-3h).
  */
+/** Valor numerico de um campo do formatToParts, com fallback seguro. */
+function partVal(
+  parts: Intl.DateTimeFormatPart[],
+  type: Intl.DateTimeFormatPartTypes,
+): number {
+  return Number(parts.find((p) => p.type === type)?.value ?? '0');
+}
+
+/** Divide 'YYYY-MM-DD' em [ano, mes, dia] numericos. */
+function ymdParts(ymd: string): [number, number, number] {
+  const [y = 0, m = 1, d = 1] = ymd.split('-').map(Number);
+  return [y, m, d];
+}
+
 function tzOffsetMs(date: Date, tz: string): number {
-  const dtf = new Intl.DateTimeFormat('en-US', {
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     hourCycle: 'h23',
     year: 'numeric',
@@ -43,17 +57,14 @@ function tzOffsetMs(date: Date, tz: string): number {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  });
-  const parts = dtf.formatToParts(date);
-  const map: Record<string, string> = {};
-  for (const p of parts) if (p.type !== 'literal') map[p.type] = p.value;
+  }).formatToParts(date);
   const asUTC = Date.UTC(
-    Number(map.year),
-    Number(map.month) - 1,
-    Number(map.day),
-    Number(map.hour),
-    Number(map.minute),
-    Number(map.second),
+    partVal(parts, 'year'),
+    partVal(parts, 'month') - 1,
+    partVal(parts, 'day'),
+    partVal(parts, 'hour'),
+    partVal(parts, 'minute'),
+    partVal(parts, 'second'),
   );
   return asUTC - date.getTime();
 }
@@ -71,7 +82,7 @@ export function zonedDateString(instant: Date, tz: string): string {
 
 /** Instante UTC correspondente a meia-noite (00:00:00.000) do dia `ymd` em `tz`. */
 export function zonedStartOfDay(ymd: string, tz: string): Date {
-  const [y, m, d] = ymd.split('-').map(Number);
+  const [y, m, d] = ymdParts(ymd);
   const guess = Date.UTC(y, m - 1, d, 0, 0, 0, 0);
   // Uma correcao basta para offsets de hora/meia-hora; a segunda cobre a
   // rara virada de DST perto da meia-noite. Brasil nao tem DST desde 2019.
@@ -182,8 +193,7 @@ export function pureDateCurrentMonthFilter(
   tz: string,
   now: Date = new Date(),
 ): { $gte: Date; $lte: Date } {
-  const ymd = zonedDateString(now, tz);
-  const [y, m] = ymd.split('-').map(Number);
+  const [y, m] = ymdParts(zonedDateString(now, tz));
   const mm = String(m).padStart(2, '0');
   const lastDate = new Date(Date.UTC(y, m, 0)).getUTCDate();
   return {
@@ -197,8 +207,7 @@ export function zonedCurrentMonthRange(
   tz: string,
   now: Date = new Date(),
 ): { start: Date; end: Date } {
-  const ymd = zonedDateString(now, tz); // YYYY-MM-DD no fuso do negocio
-  const [y, m] = ymd.split('-').map(Number);
+  const [y, m] = ymdParts(zonedDateString(now, tz)); // no fuso do negocio
   const firstDay = `${y}-${String(m).padStart(2, '0')}-01`;
   const lastDate = new Date(Date.UTC(y, m, 0)).getUTCDate(); // dia 0 do mes seguinte
   const lastDay = `${y}-${String(m).padStart(2, '0')}-${String(lastDate).padStart(2, '0')}`;
