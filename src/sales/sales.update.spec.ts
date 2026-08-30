@@ -4,9 +4,24 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { SalesService } from './sales.service';
 import { Sale, SaleStatus } from './schemas/sale.schema';
+import { Customer } from '../customers/schemas/customer.schema';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { PricingsService } from '../pricings/pricings.service';
+import { BusinessService } from '../business/business.service';
 import { MovementType } from '../stock-movements/schemas/stock-movement.schema';
+
+/**
+ * Mock de Query do Mongoose: aceita as cadeias usadas por `update()`/`findOne()`
+ * (`.exec()`, `.populate().exec()`, `.select().exec()`) e resolve `result`.
+ */
+function query(result: unknown) {
+  const q: any = {
+    exec: jest.fn().mockResolvedValue(result),
+    populate: jest.fn(() => q),
+    select: jest.fn(() => q),
+  };
+  return q;
+}
 
 describe('SalesService - update() method', () => {
   let service: SalesService;
@@ -25,17 +40,17 @@ describe('SalesService - update() method', () => {
   beforeEach(async () => {
     mockSaleModel = {
       findOne: jest.fn(),
-      findByIdAndUpdate: jest.fn(),
+      findByIdAndUpdate: jest.fn(() => query({})),
     };
 
     mockUserModel = {
-      findOne: jest.fn(),
+      findOne: jest.fn(() => query(null)),
     };
 
     mockProductModel = {
-      find: jest.fn(),
-      findById: jest.fn(),
-      updateOne: jest.fn(),
+      find: jest.fn(() => query([])),
+      findById: jest.fn(() => query(null)),
+      updateOne: jest.fn().mockResolvedValue({}),
     };
 
     mockStockMovementsService = {
@@ -62,12 +77,20 @@ describe('SalesService - update() method', () => {
           useValue: mockProductModel,
         },
         {
+          provide: getModelToken(Customer.name),
+          useValue: {},
+        },
+        {
           provide: StockMovementsService,
           useValue: mockStockMovementsService,
         },
         {
           provide: PricingsService,
           useValue: mockPricingsService,
+        },
+        {
+          provide: BusinessService,
+          useValue: { getTimezone: jest.fn().mockResolvedValue('America/Sao_Paulo') },
         },
       ],
     }).compile();
@@ -84,7 +107,7 @@ describe('SalesService - update() method', () => {
 
   describe('update() - Validações Básicas', () => {
     it('deve lançar NotFoundException se venda não existe', async () => {
-      mockSaleModel.findOne.mockResolvedValueOnce(null);
+      mockSaleModel.findOne.mockReturnValueOnce(query(null));
 
       await expect(
         service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {}),
@@ -107,7 +130,7 @@ describe('SalesService - update() method', () => {
         payments: [],
       };
 
-      mockSaleModel.findOne.mockResolvedValueOnce(cancelledSale);
+      mockSaleModel.findOne.mockReturnValueOnce(query(cancelledSale));
 
       await expect(
         service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {}),
@@ -128,15 +151,13 @@ describe('SalesService - update() method', () => {
         payments: [],
       };
 
-      mockSaleModel.findOne.mockResolvedValueOnce(sale);
+      mockSaleModel.findOne.mockReturnValueOnce(query(sale));
 
       await expect(
         service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {
           createdAt: 'data-invalida',
         }),
-      ).rejects.toThrow(
-        new BadRequestException('Data inválida'),
-      );
+      ).rejects.toThrow(new BadRequestException('Data inválida'));
     });
 
     it('deve lançar erro se createdAt é futuro', async () => {
@@ -149,7 +170,7 @@ describe('SalesService - update() method', () => {
         payments: [],
       };
 
-      mockSaleModel.findOne.mockResolvedValueOnce(sale);
+      mockSaleModel.findOne.mockReturnValueOnce(query(sale));
 
       const futureDate = new Date();
       futureDate.setFullYear(futureDate.getFullYear() + 1);
@@ -174,20 +195,30 @@ describe('SalesService - update() method', () => {
           {
             productId: new Types.ObjectId(mockProductId),
             productName: 'Produto teste',
-            unitPrice: 25.90,
+            unitPrice: 25.9,
             quantity: 2,
-            subtotal: 51.80,
+            subtotal: 51.8,
             profit: 10,
             comboComponents: [],
           },
         ],
-        total: 51.80,
+        total: 51.8,
         totalProfit: 10,
-        payments: [{ method: 'DINHEIRO', amount: 51.80 }],
+        payments: [{ method: 'DINHEIRO', amount: 51.8 }],
       };
 
-      mockSaleModel.findOne.mockResolvedValueOnce(sale);
-      mockProductModel.find.mockResolvedValueOnce([]);
+      const product = {
+        _id: new Types.ObjectId(mockProductId),
+        name: 'Produto teste',
+        costPrice: 10,
+        pricingId: null,
+        stock: 10,
+        isCombo: false,
+        comboItems: [],
+      };
+
+      mockSaleModel.findOne.mockReturnValueOnce(query(sale));
+      mockProductModel.find.mockReturnValueOnce(query([product]));
 
       // Tenta atualizar com pagamento incorreto
       await expect(
@@ -195,11 +226,11 @@ describe('SalesService - update() method', () => {
           items: [
             {
               productId: mockProductId,
-              unitPrice: 30.00,
+              unitPrice: 30.0,
               quantity: 2, // novo total: 60.00
             },
           ],
-          payments: [{ method: 'DINHEIRO', amount: 51.80 }], // ainda 51.80
+          payments: [{ method: 'DINHEIRO', amount: 51.8 }], // ainda 51.80
         }),
       ).rejects.toThrow(BadRequestException);
     });
@@ -223,43 +254,40 @@ describe('SalesService - update() method', () => {
           {
             productId: mockProduct._id,
             productName: mockProduct.name,
-            unitPrice: 25.90,
+            unitPrice: 25.9,
             quantity: 2,
-            subtotal: 51.80,
-            profit: 31.80,
+            subtotal: 51.8,
+            profit: 31.8,
             costPrice: 10,
             comboComponents: [],
           },
         ],
-        total: 51.80,
-        totalProfit: 31.80,
-        payments: [{ method: 'DINHEIRO', amount: 51.80 }],
-        save: jest.fn().mockResolvedValue(true),
+        total: 51.8,
+        totalProfit: 31.8,
+        payments: [{ method: 'DINHEIRO', amount: 51.8 }],
       };
 
-      mockSaleModel.findOne.mockResolvedValueOnce(sale);
-      mockProductModel.find.mockResolvedValueOnce([mockProduct]);
+      // 1ª chamada: a venda a editar (via `.exec()`).
+      // 2ª chamada: o retorno de `this.findOne()` (via `.populate().exec()`).
+      mockSaleModel.findOne
+        .mockReturnValueOnce(query(sale))
+        .mockReturnValue(query(sale));
+      mockProductModel.find.mockReturnValueOnce(query([mockProduct]));
       mockPricingsService.findManyByIds.mockResolvedValueOnce([]);
-      mockUserModel.findOne.mockResolvedValueOnce({
-        _id: mockUserId,
-        displayName: 'Test User',
-      });
-
-      const mockFindOne = jest.fn().mockResolvedValueOnce(sale);
-      mockSaleModel.findOne = jest.fn()
-        .mockResolvedValueOnce(sale) // Primeira chamada
-        .mockImplementation(() => ({ populate: () => ({ exec: mockFindOne }) })); // Segunda chamada
+      mockUserModel.findOne.mockReturnValueOnce(
+        query({ _id: mockUserId, displayName: 'Test User' }),
+      );
 
       // Calcula novo total corretamente: 30 * 2 = 60
       await service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {
         items: [
           {
             productId: mockProductId.toString(),
-            unitPrice: 30.00,
+            unitPrice: 30.0,
             quantity: 2,
           },
         ],
-        payments: [{ method: 'DINHEIRO', amount: 60.00 }],
+        payments: [{ method: 'DINHEIRO', amount: 60.0 }],
       });
 
       // Espera que findByIdAndUpdate tenha sido chamado
@@ -287,33 +315,30 @@ describe('SalesService - update() method', () => {
           {
             productId: mockProduct._id,
             productName: mockProduct.name,
-            unitPrice: 25.90,
+            unitPrice: 25.9,
             quantity: 2, // quantidade antiga
-            subtotal: 51.80,
-            profit: 31.80,
+            subtotal: 51.8,
+            profit: 31.8,
             costPrice: 10,
             comboComponents: [],
           },
         ],
-        total: 51.80,
-        totalProfit: 31.80,
-        payments: [{ method: 'DINHEIRO', amount: 60.00 }],
+        total: 51.8,
+        totalProfit: 31.8,
+        payments: [{ method: 'DINHEIRO', amount: 60.0 }],
       };
 
       mockSaleModel.findOne
-        .mockResolvedValueOnce(sale)
-        .mockImplementation(() => ({
-          populate: () => ({ exec: jest.fn().mockResolvedValueOnce(sale) }),
-        }));
+        .mockReturnValueOnce(query(sale))
+        .mockReturnValue(query(sale));
 
-      mockProductModel.find.mockResolvedValueOnce([mockProduct]);
-      mockProductModel.findById.mockResolvedValueOnce(mockProduct);
+      mockProductModel.find.mockReturnValueOnce(query([mockProduct]));
+      mockProductModel.findById.mockReturnValueOnce(query(mockProduct));
       mockProductModel.updateOne.mockResolvedValueOnce({});
 
-      mockUserModel.findOne.mockResolvedValueOnce({
-        _id: mockUserId,
-        displayName: 'Test User',
-      });
+      mockUserModel.findOne.mockReturnValueOnce(
+        query({ _id: mockUserId, displayName: 'Test User' }),
+      );
 
       mockPricingsService.findManyByIds.mockResolvedValueOnce([]);
       mockStockMovementsService.recordSaleMovement.mockResolvedValueOnce(null);
@@ -323,11 +348,11 @@ describe('SalesService - update() method', () => {
         items: [
           {
             productId: mockProductId.toString(),
-            unitPrice: 25.90,
+            unitPrice: 25.9,
             quantity: 5,
           },
         ],
-        payments: [{ method: 'DINHEIRO', amount: 129.50 }],
+        payments: [{ method: 'DINHEIRO', amount: 129.5 }],
       });
 
       // Verifica se StockMovement foi registrado
@@ -337,7 +362,7 @@ describe('SalesService - update() method', () => {
           quantity: 3, // |5 - 2|
         }),
         10, // previousStock
-        7,  // newStock = 10 - 3
+        7, // newStock = 10 - 3
       );
     });
   });

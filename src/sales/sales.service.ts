@@ -19,6 +19,8 @@ import { MovementType } from '../stock-movements/schemas/stock-movement.schema';
 import { PricingsService } from '../pricings/pricings.service';
 import { Role } from '../common/enums/role.enum';
 import { PaymentMethod } from '../common/enums/payment-method.enum';
+import { BusinessService } from '../business/business.service';
+import { instantRangeFilter, zonedTodayRange } from '../common/date/timezone.util';
 
 @Injectable()
 export class SalesService {
@@ -33,6 +35,7 @@ export class SalesService {
     private readonly customerModel: Model<CustomerDocument>,
     private readonly stockMovementsService: StockMovementsService,
     private readonly pricingsService: PricingsService,
+    private readonly businessService: BusinessService,
   ) {}
 
   /** Resolve o custo efetivo de cada produto no momento da venda: o
@@ -253,14 +256,10 @@ export class SalesService {
       businessId: new Types.ObjectId(businessId),
     };
 
-    // dateFrom/dateTo são ISO completos enviados pelo frontend já convertidos para UTC
-    // (ex: "2026-06-06T03:00:00.000Z" = meia-noite no Brasil UTC-3)
-    if (dateFrom || dateTo) {
-      const dateFilter: Record<string, Date> = {};
-      if (dateFrom) dateFilter.$gte = new Date(dateFrom);
-      if (dateTo) dateFilter.$lte = new Date(dateTo);
-      filter.createdAt = dateFilter;
-    }
+    // Limites resolvidos no fuso do negócio (robusto a instante deslocado ou 'YYYY-MM-DD').
+    const tz = await this.businessService.getTimezone(businessId);
+    const dateFilter = instantRangeFilter(dateFrom, dateTo, tz);
+    if (dateFilter) filter.createdAt = dateFilter;
 
     if (status) filter.status = status;
     if (operatorId) filter.userId = new Types.ObjectId(operatorId);
@@ -482,10 +481,8 @@ export class SalesService {
     count: number;
     byChannel: Record<string, number>;
   }> {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
+    const tz = await this.businessService.getTimezone(businessId);
+    const { start, end } = zonedTodayRange(tz);
 
     const sales = await this.saleModel
       .find({
@@ -553,12 +550,9 @@ export class SalesService {
     };
     if (resolvedUserId) match.userId = resolvedUserId;
 
-    if (dateFrom || dateTo) {
-      const dateFilter: Record<string, Date> = {};
-      if (dateFrom) dateFilter.$gte = new Date(dateFrom);
-      if (dateTo) dateFilter.$lte = new Date(dateTo);
-      match.createdAt = dateFilter;
-    }
+    const tz = await this.businessService.getTimezone(businessId);
+    const dateFilter = instantRangeFilter(dateFrom, dateTo, tz);
+    if (dateFilter) match.createdAt = dateFilter;
 
     const result = await this.saleModel.aggregate([
       { $match: match },
@@ -683,12 +677,9 @@ export class SalesService {
       status: SaleStatus.CONCLUIDA,
     };
 
-    if (dateFrom || dateTo) {
-      const dateFilter: Record<string, Date> = {};
-      if (dateFrom) dateFilter.$gte = new Date(dateFrom);
-      if (dateTo) dateFilter.$lte = new Date(dateTo);
-      match.createdAt = dateFilter;
-    }
+    const tz = await this.businessService.getTimezone(businessId);
+    const dateFilter = instantRangeFilter(dateFrom, dateTo, tz);
+    if (dateFilter) match.createdAt = dateFilter;
 
     const result = await this.saleModel.aggregate([
       { $match: match },

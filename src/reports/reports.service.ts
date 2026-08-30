@@ -4,6 +4,8 @@ import { Model, Types } from 'mongoose';
 import { Sale, SaleDocument, SaleStatus } from '../sales/schemas/sale.schema';
 import { StockMovement, StockMovementDocument, MovementType } from '../stock-movements/schemas/stock-movement.schema';
 import { Expense, ExpenseDocument } from '../expenses/schemas/expense.schema';
+import { BusinessService } from '../business/business.service';
+import { pureDateFilter, zonedDateString } from '../common/date/timezone.util';
 
 @Injectable()
 export class ReportsService {
@@ -11,6 +13,7 @@ export class ReportsService {
     @InjectModel(Sale.name) private readonly saleModel: Model<SaleDocument>,
     @InjectModel(StockMovement.name) private readonly movementModel: Model<StockMovementDocument>,
     @InjectModel(Expense.name) private readonly expenseModel: Model<ExpenseDocument>,
+    private readonly businessService: BusinessService,
   ) {}
 
   async getOverview(
@@ -95,6 +98,7 @@ export class ReportsService {
     dateTo?: string,
     groupBy: 'day' | 'week' | 'month' = 'day',
   ): Promise<{ period: string; revenue: number; profit: number; count: number }[]> {
+    const tz = await this.businessService.getTimezone(businessId);
     const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo);
     const dateFormat = groupBy === 'month' ? '%Y-%m' : groupBy === 'week' ? '%Y-%V' : '%Y-%m-%d';
 
@@ -102,7 +106,7 @@ export class ReportsService {
       { $match: match },
       {
         $group: {
-          _id: { $dateToString: { format: dateFormat, date: '$createdAt', timezone: 'America/Sao_Paulo' } },
+          _id: { $dateToString: { format: dateFormat, date: '$createdAt', timezone: tz } },
           revenue: { $sum: '$total' },
           profit: { $sum: '$totalProfit' },
           count: { $sum: 1 },
@@ -277,8 +281,9 @@ export class ReportsService {
     surplusOrDeficit: number;
     isBeyondBreakeven: boolean;
   }> {
+    const tz = await this.businessService.getTimezone(businessId);
     const [expenseSummary, overview] = await Promise.all([
-      this.getExpenseSummaryRaw(businessId, dateFrom, dateTo),
+      this.getExpenseSummaryRaw(businessId, dateFrom, dateTo, tz),
       this.getOverviewRaw(businessId, dateFrom, dateTo),
     ]);
 
@@ -309,10 +314,12 @@ export class ReportsService {
     totalOut: number;
     netBalance: number;
   }> {
+    const tz = await this.businessService.getTimezone(businessId);
     const { from, to } = this.parseDateRange(dateFrom, dateTo);
 
     const saleDateFilter: Record<string, Date> = { $gte: from, $lte: to };
-    const expenseDateFilter: Record<string, Date> = { $gte: from, $lte: to };
+    // Expense.date e gravado como meia-noite UTC de um dia puro — alinha o filtro a isso.
+    const expenseDateFilter = pureDateFilter(dateFrom, dateTo, tz) ?? { $gte: from, $lte: to };
 
     const [salesRaw, expenses] = await Promise.all([
       this.saleModel.aggregate<{ total: number; createdAt: Date }>([
@@ -328,12 +335,12 @@ export class ReportsService {
     const entries: { date: string; amount: number; type: 'in' | 'out'; description: string }[] = [];
 
     for (const sale of salesRaw) {
-      const d = new Date(sale.createdAt);
-      entries.push({ date: this.formatDate(d), amount: sale.total, type: 'in', description: 'Venda' });
+      // Venda tem instante real: agrupa pelo dia no fuso do negocio.
+      entries.push({ date: zonedDateString(new Date(sale.createdAt), tz), amount: sale.total, type: 'in', description: 'Venda' });
     }
     for (const exp of expenses) {
-      const d = new Date(exp.date);
-      entries.push({ date: this.formatDate(d), amount: exp.amount, type: 'out', description: exp.name });
+      // Despesa e dia puro (meia-noite UTC): a data de calendario e a propria string UTC.
+      entries.push({ date: new Date(exp.date).toISOString().slice(0, 10), amount: exp.amount, type: 'out', description: exp.name });
     }
 
     entries.sort((a, b) => a.date.localeCompare(b.date));
@@ -437,16 +444,13 @@ export class ReportsService {
 
   private async getExpenseSummaryRaw(
     businessId: string,
-    dateFrom?: string,
-    dateTo?: string,
+    dateFrom: string | undefined,
+    dateTo: string | undefined,
+    tz: string,
   ): Promise<{ total: number; totalFixed: number; totalVariable: number }> {
     const match: Record<string, unknown> = { businessId: new Types.ObjectId(businessId) };
-    if (dateFrom || dateTo) {
-      const f: Record<string, Date> = {};
-      if (dateFrom) f.$gte = new Date(dateFrom);
-      if (dateTo) f.$lte = new Date(dateTo);
-      match.date = f;
-    }
+    const dateFilter = pureDateFilter(dateFrom, dateTo, tz);
+    if (dateFilter) match.date = dateFilter;
     const result = await this.expenseModel.aggregate([
       { $match: match },
       {
@@ -462,15 +466,14 @@ export class ReportsService {
   }
 
   private parseDateRange(dateFrom?: string, dateTo?: string): { from: Date; to: Date } {
+    // Quando o cliente envia os limites (caso normal), usa exatamente o que veio —
+    // nao re-ancorar com setHours() sobre um instante ja parseado (dependia do TZ do servidor).
+    if (dateFrom && dateTo) return { from: new Date(dateFrom), to: new Date(dateTo) };
     const now = new Date();
-    const to = dateTo ? new Date(dateTo) : new Date(now.setHours(23, 59, 59, 999));
-    const from = dateFrom ? new Date(dateFrom) : new Date(new Date().setDate(new Date().getDate() - 29));
-    from.setHours(0, 0, 0, 0);
+    const to = dateTo ? new Date(dateTo) : new Date(new Date(now).setHours(23, 59, 59, 999));
+    const from = dateFrom ? new Date(dateFrom) : new Date(new Date(now).setHours(0, 0, 0, 0));
+    if (!dateFrom) from.setDate(from.getDate() - 29);
     return { from, to };
-  }
-
-  private formatDate(d: Date): string {
-    return d.toISOString().slice(0, 10);
   }
 
   private buildMatch(

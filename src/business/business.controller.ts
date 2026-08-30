@@ -4,10 +4,23 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
+import { UpdateBusinessDto } from './dto/update-business.dto';
 
 @Controller('business')
 export class BusinessController {
   constructor(private readonly businessService: BusinessService) {}
+
+  @Get('settings')
+  @Roles(Role.OWNER)
+  getSettings(@CurrentUser() user: any) {
+    return this.businessService.getSettings(user.businessId);
+  }
+
+  @Patch('settings')
+  @Roles(Role.OWNER)
+  updateSettings(@CurrentUser() user: any, @Body() dto: UpdateBusinessDto) {
+    return this.businessService.updateSettings(user.businessId, dto);
+  }
 
   @Get('permissions')
   @Roles(Role.OWNER)

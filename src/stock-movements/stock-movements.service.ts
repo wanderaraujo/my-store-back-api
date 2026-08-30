@@ -5,6 +5,8 @@ import { StockMovement, StockMovementDocument, MovementType } from './schemas/st
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreateStockMovementDto } from './dto/create-stock-movement.dto';
+import { BusinessService } from '../business/business.service';
+import { instantRangeFilter } from '../common/date/timezone.util';
 
 export interface InternalMovementPayload {
   productId: Types.ObjectId;
@@ -28,6 +30,7 @@ export class StockMovementsService {
     private readonly productModel: Model<ProductDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    private readonly businessService: BusinessService,
   ) {}
 
   async createManual(
@@ -132,12 +135,9 @@ export class StockMovementsService {
     if (productId) filter.productId = new Types.ObjectId(productId);
     if (type) filter.type = type;
 
-    if (dateFrom || dateTo) {
-      const dateFilter: Record<string, Date> = {};
-      if (dateFrom) dateFilter.$gte = new Date(dateFrom);
-      if (dateTo) dateFilter.$lte = new Date(dateTo);
-      filter.createdAt = dateFilter;
-    }
+    const tz = await this.businessService.getTimezone(businessId);
+    const dateFilter = instantRangeFilter(dateFrom, dateTo, tz);
+    if (dateFilter) filter.createdAt = dateFilter;
 
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([

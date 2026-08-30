@@ -22,6 +22,7 @@ describe('SalesService.resolveCostPrices', () => {
       {} as any,
       {} as any,
       pricingsService,
+      {} as any,
     );
     return { service, pricingsService };
   }
@@ -93,6 +94,7 @@ describe('SalesService.create — venda fiado exige cliente', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
 
     const dto = {
@@ -122,6 +124,7 @@ describe('SalesService.settleDebt', () => {
     const service = new SalesService(
       saleModel,
       userModel,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,

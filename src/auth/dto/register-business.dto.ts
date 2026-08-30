@@ -20,4 +20,8 @@ export class RegisterBusinessDto {
   @IsOptional()
   @IsString()
   currency?: string;
+
+  @IsOptional()
+  @IsString()
+  timezone?: string;
 }

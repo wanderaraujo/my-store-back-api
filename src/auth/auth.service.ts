@@ -13,6 +13,7 @@ import {
 } from '../categories/schemas/category.schema';
 import { RegisterBusinessDto } from './dto/register-business.dto';
 import { Role } from '../common/enums/role.enum';
+import { resolveTimeZone } from '../common/date/timezone.util';
 
 @Injectable()
 export class AuthService {
@@ -170,6 +171,7 @@ export class AuthService {
       businessType: dto.businessType,
       city: dto.city,
       currency: dto.currency || 'BRL',
+      timezone: resolveTimeZone(dto.timezone),
     });
 
     await this.categoryModel.create({

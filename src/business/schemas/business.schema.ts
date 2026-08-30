@@ -70,6 +70,10 @@ export class Business {
   @Prop({ default: 'BRL' })
   currency: string;
 
+  /** Fuso IANA do negocio — base de TODO calculo de dia/periodo (ver common/date/timezone.util). */
+  @Prop({ default: 'America/Sao_Paulo' })
+  timezone: string;
+
   @Prop({ default: true })
   isActive: boolean;
 

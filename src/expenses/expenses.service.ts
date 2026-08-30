@@ -3,6 +3,13 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Expense, ExpenseDocument } from './schemas/expense.schema';
 import { CreateExpenseDto, UpdateExpenseDto } from './dto/expense.dto';
+import { BusinessService } from '../business/business.service';
+import {
+  pureDateFilter,
+  pureDateCurrentMonthFilter,
+  toYmd,
+  utcDayStart,
+} from '../common/date/timezone.util';
 
 export const OPERATIONAL_HOURS_PER_MONTH = 168;
 
@@ -10,12 +17,15 @@ export const OPERATIONAL_HOURS_PER_MONTH = 168;
 export class ExpensesService {
   constructor(
     @InjectModel(Expense.name) private readonly expenseModel: Model<ExpenseDocument>,
+    private readonly businessService: BusinessService,
   ) {}
 
   async create(businessId: string, dto: CreateExpenseDto): Promise<Expense> {
+    const tz = await this.businessService.getTimezone(businessId);
     const expense = new this.expenseModel({
       ...dto,
-      date: new Date(dto.date),
+      // Data pura: normaliza para meia-noite UTC do dia de calendario informado.
+      date: utcDayStart(toYmd(dto.date, tz)),
       businessId: new Types.ObjectId(businessId),
     });
     return expense.save();
@@ -27,15 +37,12 @@ export class ExpensesService {
     dateTo?: string,
     category?: string,
   ): Promise<Expense[]> {
+    const tz = await this.businessService.getTimezone(businessId);
     const filter: Record<string, unknown> = {
       businessId: new Types.ObjectId(businessId),
     };
-    if (dateFrom || dateTo) {
-      const dateFilter: Record<string, Date> = {};
-      if (dateFrom) dateFilter.$gte = new Date(dateFrom);
-      if (dateTo) dateFilter.$lte = new Date(dateTo);
-      filter.date = dateFilter;
-    }
+    const dateFilter = pureDateFilter(dateFrom, dateTo, tz);
+    if (dateFilter) filter.date = dateFilter;
     if (category) filter.category = category;
 
     return this.expenseModel.find(filter).sort({ date: -1 }).lean();
@@ -52,7 +59,10 @@ export class ExpensesService {
 
   async update(id: string, businessId: string, dto: UpdateExpenseDto): Promise<Expense> {
     const update: Record<string, unknown> = { ...dto };
-    if (dto.date) update.date = new Date(dto.date);
+    if (dto.date) {
+      const tz = await this.businessService.getTimezone(businessId);
+      update.date = utcDayStart(toYmd(dto.date, tz));
+    }
 
     const expense = await this.expenseModel.findOneAndUpdate(
       { _id: new Types.ObjectId(id), businessId: new Types.ObjectId(businessId) },
@@ -81,13 +91,10 @@ export class ExpensesService {
     totalVariable: number;
     byCategory: { category: string; total: number }[];
   }> {
+    const tz = await this.businessService.getTimezone(businessId);
     const match: Record<string, unknown> = { businessId: new Types.ObjectId(businessId) };
-    if (dateFrom || dateTo) {
-      const dateFilter: Record<string, Date> = {};
-      if (dateFrom) dateFilter.$gte = new Date(dateFrom);
-      if (dateTo) dateFilter.$lte = new Date(dateTo);
-      match.date = dateFilter;
-    }
+    const dateFilter = pureDateFilter(dateFrom, dateTo, tz);
+    if (dateFilter) match.date = dateFilter;
 
     const [result] = await this.expenseModel.aggregate([
       { $match: match },
@@ -137,20 +144,14 @@ export class ExpensesService {
     return result?.total ?? 0;
   }
 
-  private currentMonthRange(): { start: Date; end: Date } {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-    return { start, end };
-  }
-
   async getCurrentMonthOperationalCost(businessId: string): Promise<{
     total: number;
     hourlyRate: number;
     periodStart: Date;
     periodEnd: Date;
   }> {
-    const { start, end } = this.currentMonthRange();
+    const tz = await this.businessService.getTimezone(businessId);
+    const { $gte: start, $lte: end } = pureDateCurrentMonthFilter(tz);
     const total = await this.sumOperational(businessId, start, end);
     return {
       total,
