@@ -30,6 +30,7 @@ export class SalesController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('operatorId') operatorId?: string,
+    @Query('campaign') campaign?: string,
   ) {
     return this.salesService.findAll(user.businessId, user.role, {
       page: page ? parseInt(page) : 1,
@@ -38,6 +39,7 @@ export class SalesController {
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
       operatorId: operatorId || undefined,
+      campaign: campaign || undefined,
     });
   }
 

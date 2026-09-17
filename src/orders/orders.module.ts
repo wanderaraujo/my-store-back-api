@@ -1,31 +1,38 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { SalesController } from './sales.controller';
-import { SalesService } from './sales.service';
-import { Sale, SaleSchema } from './schemas/sale.schema';
-import { User, UserSchema } from '../users/schemas/user.schema';
+import { OrdersController } from './orders.controller';
+import { OrdersService } from './orders.service';
+import { Order, OrderSchema } from './schemas/order.schema';
+import {
+  OrderCounter,
+  OrderCounterSchema,
+} from './schemas/order-counter.schema';
 import { Product, ProductSchema } from '../products/schemas/product.schema';
+import { User, UserSchema } from '../users/schemas/user.schema';
 import { Customer, CustomerSchema } from '../customers/schemas/customer.schema';
 import { BusinessModule } from '../business/business.module';
 import { StockMovementsModule } from '../stock-movements/stock-movements.module';
 import { PricingsModule } from '../pricings/pricings.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
+import { SalesModule } from '../sales/sales.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
-      { name: Sale.name, schema: SaleSchema },
-      { name: User.name, schema: UserSchema },
+      { name: Order.name, schema: OrderSchema },
+      { name: OrderCounter.name, schema: OrderCounterSchema },
       { name: Product.name, schema: ProductSchema },
+      { name: User.name, schema: UserSchema },
       { name: Customer.name, schema: CustomerSchema },
     ]),
     BusinessModule,
     StockMovementsModule,
     PricingsModule,
     CampaignsModule,
+    SalesModule,
   ],
-  controllers: [SalesController],
-  providers: [SalesService],
-  exports: [SalesService],
+  controllers: [OrdersController],
+  providers: [OrdersService],
+  exports: [OrdersService],
 })
-export class SalesModule {}
+export class OrdersModule {}

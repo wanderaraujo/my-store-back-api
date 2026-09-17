@@ -8,6 +8,7 @@ import { Customer } from '../customers/schemas/customer.schema';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { PricingsService } from '../pricings/pricings.service';
 import { BusinessService } from '../business/business.service';
+import { CampaignsService } from '../campaigns/campaigns.service';
 import { MovementType } from '../stock-movements/schemas/stock-movement.schema';
 
 /**
@@ -91,6 +92,16 @@ describe('SalesService - update() method', () => {
         {
           provide: BusinessService,
           useValue: { getTimezone: jest.fn().mockResolvedValue('America/Sao_Paulo') },
+        },
+        {
+          provide: CampaignsService,
+          useValue: {
+        prepareForDocument: jest
+          .fn()
+          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+        commitUsage: jest.fn().mockResolvedValue(undefined),
+        releaseUsage: jest.fn().mockResolvedValue(undefined),
+      },
         },
       ],
     }).compile();

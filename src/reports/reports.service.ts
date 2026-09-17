@@ -6,6 +6,7 @@ import { StockMovement, StockMovementDocument, MovementType } from '../stock-mov
 import { Expense, ExpenseDocument } from '../expenses/schemas/expense.schema';
 import { BusinessService } from '../business/business.service';
 import { pureDateFilter, zonedDateString } from '../common/date/timezone.util';
+import { normalizeCampaignName } from '../common/campaigns/campaign.util';
 
 @Injectable()
 export class ReportsService {
@@ -20,6 +21,7 @@ export class ReportsService {
     businessId: string,
     dateFrom?: string,
     dateTo?: string,
+    campaign?: string,
   ): Promise<{
     totalRevenue: number;
     totalProfit: number;
@@ -29,8 +31,8 @@ export class ReportsService {
     cancelledCount: number;
     cancelledRevenue: number;
   }> {
-    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo);
-    const cancelMatch = this.buildMatch(businessId, [SaleStatus.CANCELADA], dateFrom, dateTo);
+    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo, campaign);
+    const cancelMatch = this.buildMatch(businessId, [SaleStatus.CANCELADA], dateFrom, dateTo, campaign);
 
     const [result, cancelResult] = await Promise.all([
       this.saleModel.aggregate([
@@ -61,6 +63,7 @@ export class ReportsService {
     businessId: string,
     dateFrom?: string,
     dateTo?: string,
+    campaign?: string,
   ): Promise<{
     current: { revenue: number; profit: number; count: number; avgTicket: number };
     previous: { revenue: number; profit: number; count: number; avgTicket: number };
@@ -72,9 +75,12 @@ export class ReportsService {
     const prevTo = new Date(from.getTime() - 1);
     const prevFrom = new Date(prevTo.getTime() - diffMs);
 
+    // A comparacao respeita a campaign ativa — senao os cards da visao geral
+    // mostrariam o faturamento da campanha com uma variacao calculada em cima
+    // do periodo inteiro.
     const [current, previous] = await Promise.all([
-      this.getOverviewRaw(businessId, from.toISOString(), to.toISOString()),
-      this.getOverviewRaw(businessId, prevFrom.toISOString(), prevTo.toISOString()),
+      this.getOverviewRaw(businessId, from.toISOString(), to.toISOString(), campaign),
+      this.getOverviewRaw(businessId, prevFrom.toISOString(), prevTo.toISOString(), campaign),
     ]);
 
     const growth = (curr: number, prev: number) =>
@@ -97,9 +103,10 @@ export class ReportsService {
     dateFrom?: string,
     dateTo?: string,
     groupBy: 'day' | 'week' | 'month' = 'day',
+    campaign?: string,
   ): Promise<{ period: string; revenue: number; profit: number; count: number }[]> {
     const tz = await this.businessService.getTimezone(businessId);
-    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo);
+    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo, campaign);
     const dateFormat = groupBy === 'month' ? '%Y-%m' : groupBy === 'week' ? '%Y-%V' : '%Y-%m-%d';
 
     const result = await this.saleModel.aggregate([
@@ -123,8 +130,9 @@ export class ReportsService {
     dateFrom?: string,
     dateTo?: string,
     limit = 10,
+    campaign?: string,
   ): Promise<{ productId: string; productName: string; totalRevenue: number; totalQty: number; totalProfit: number }[]> {
-    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo);
+    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo, campaign);
 
     const result = await this.saleModel.aggregate([
       { $match: match },
@@ -154,6 +162,7 @@ export class ReportsService {
     businessId: string,
     dateFrom?: string,
     dateTo?: string,
+    campaign?: string,
   ): Promise<{
     productId: string;
     productName: string;
@@ -165,7 +174,7 @@ export class ReportsService {
     cumulativeShare: number;
     abc: 'A' | 'B' | 'C';
   }[]> {
-    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo);
+    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo, campaign);
 
     const result = await this.saleModel.aggregate([
       { $match: match },
@@ -368,6 +377,7 @@ export class ReportsService {
     businessId: string,
     dateFrom?: string,
     dateTo?: string,
+    campaign?: string,
   ): Promise<{
     channel: string;
     revenue: number;
@@ -375,7 +385,7 @@ export class ReportsService {
     count: number;
     byPaymentMethod: { paymentMethod: string; revenue: number; count: number }[];
   }[]> {
-    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo);
+    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo, campaign);
 
     const result = await this.saleModel.aggregate([
       { $match: match },
@@ -432,8 +442,9 @@ export class ReportsService {
     businessId: string,
     dateFrom?: string,
     dateTo?: string,
+    campaign?: string,
   ): Promise<{ revenue: number; profit: number; count: number; avgTicket: number }> {
-    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo);
+    const match = this.buildMatch(businessId, [SaleStatus.CONCLUIDA], dateFrom, dateTo, campaign);
     const result = await this.saleModel.aggregate([
       { $match: match },
       { $group: { _id: null, revenue: { $sum: '$total' }, profit: { $sum: '$totalProfit' }, count: { $sum: 1 } } },
@@ -481,11 +492,17 @@ export class ReportsService {
     statuses: SaleStatus[],
     dateFrom?: string,
     dateTo?: string,
+    campaign?: string,
   ): Record<string, unknown> {
     const match: Record<string, unknown> = {
       businessId: new Types.ObjectId(businessId),
       status: { $in: statuses },
     };
+    // Filtro de campanha (#NATAL2025): a campaign e gravada normalizada na venda.
+    if (campaign) {
+      const normalized = normalizeCampaignName(campaign);
+      if (normalized) match.tags = normalized;
+    }
     if (dateFrom || dateTo) {
       const dateFilter: Record<string, Date> = {};
       if (dateFrom) dateFilter.$gte = new Date(dateFrom);

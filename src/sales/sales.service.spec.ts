@@ -23,6 +23,13 @@ describe('SalesService.resolveCostPrices', () => {
       {} as any,
       pricingsService,
       {} as any,
+      {
+        prepareForDocument: jest
+          .fn()
+          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+        commitUsage: jest.fn().mockResolvedValue(undefined),
+        releaseUsage: jest.fn().mockResolvedValue(undefined),
+      } as any,
     );
     return { service, pricingsService };
   }
@@ -95,6 +102,13 @@ describe('SalesService.create — venda fiado exige cliente', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        prepareForDocument: jest
+          .fn()
+          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+        commitUsage: jest.fn().mockResolvedValue(undefined),
+        releaseUsage: jest.fn().mockResolvedValue(undefined),
+      } as any,
     );
 
     const dto = {
@@ -129,6 +143,13 @@ describe('SalesService.settleDebt', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        prepareForDocument: jest
+          .fn()
+          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+        commitUsage: jest.fn().mockResolvedValue(undefined),
+        releaseUsage: jest.fn().mockResolvedValue(undefined),
+      } as any,
     );
     return { service, saleModel, user };
   }

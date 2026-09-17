@@ -9,6 +9,7 @@ export enum MovementType {
   DESPERDICIO = 'desperdicio',
   AJUSTE = 'ajuste',
   VENDA = 'venda',
+  ENCOMENDA = 'encomenda',
   CANCELAMENTO = 'cancelamento',
 }
 
@@ -43,6 +44,9 @@ export class StockMovement {
 
   @Prop({ type: Types.ObjectId, ref: 'Sale' })
   saleId: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'Order' })
+  orderId: Types.ObjectId;
 }
 
 export const StockMovementSchema = SchemaFactory.createForClass(StockMovement);

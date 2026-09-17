@@ -15,6 +15,8 @@ import { StockMovementsModule } from './stock-movements/stock-movements.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { IngredientsModule } from './ingredients/ingredients.module';
 import { PricingsModule } from './pricings/pricings.module';
+import { CampaignsModule } from './campaigns/campaigns.module';
+import { OrdersModule } from './orders/orders.module';
 import { FirebaseAuthGuard } from './common/guards/firebase-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -41,6 +43,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     ExpensesModule,
     IngredientsModule,
     PricingsModule,
+    CampaignsModule,
+    OrdersModule,
   ],
   providers: [
     {

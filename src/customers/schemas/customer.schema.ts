@@ -14,6 +14,10 @@ export class Customer {
   @Prop()
   document: string;
 
+  /** Endereco de entrega — usado no card do cliente e nas encomendas. */
+  @Prop()
+  address: string;
+
   @Prop()
   notes: string;
 

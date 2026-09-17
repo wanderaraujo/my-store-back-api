@@ -19,8 +19,11 @@ import { MovementType } from '../stock-movements/schemas/stock-movement.schema';
 import { PricingsService } from '../pricings/pricings.service';
 import { Role } from '../common/enums/role.enum';
 import { PaymentMethod } from '../common/enums/payment-method.enum';
+import { SaleChannel } from '../common/enums/sale-channel.enum';
 import { BusinessService } from '../business/business.service';
+import { PreparedCampaigns, CampaignsService } from '../campaigns/campaigns.service';
 import { instantRangeFilter, zonedTodayRange } from '../common/date/timezone.util';
+import { normalizeCampaignName, roundMoney } from '../common/campaigns/campaign.util';
 
 @Injectable()
 export class SalesService {
@@ -36,6 +39,7 @@ export class SalesService {
     private readonly stockMovementsService: StockMovementsService,
     private readonly pricingsService: PricingsService,
     private readonly businessService: BusinessService,
+    private readonly campaignsService: CampaignsService,
   ) {}
 
   /** Resolve o custo efetivo de cada produto no momento da venda: o
@@ -147,17 +151,53 @@ export class SalesService {
       return { ...item, costPrice, profit, comboComponents };
     });
 
-    const totalProfit = items.reduce((sum, item) => sum + item.profit, 0);
+    const itemsTotal = roundMoney(
+      items.reduce((sum, item) => sum + item.subtotal, 0),
+    );
+
+    // A campaign digitada no caixa ("#natal 2025") vira NATAL2025, consome uma
+    // utilizacao da campanha e devolve o desconto que ela concede — ver
+    // `CampaignsService.prepareForDocument`.
+    const preparedTags = await this.campaignsService.prepareForDocument(
+      businessId,
+      dto.tags,
+      itemsTotal,
+    );
+    const { tags, discount } = preparedTags;
+
+    const total = roundMoney(itemsTotal - (discount?.amount ?? 0));
+
+    // O caixa manda o total que mostrou ao cliente. Se ele nao bate com o que
+    // o servidor calculou (tela desatualizada, desconto forjado), a venda nao
+    // passa: o extrato de pagamentos fecharia com um valor que ninguem cobrou.
+    if (Math.abs(dto.total - total) > 0.01) {
+      throw new BadRequestException(
+        `O total enviado (R$ ${dto.total.toFixed(2)}) não confere com o calculado (R$ ${total.toFixed(2)}). Atualize a tela e refaça a venda.`,
+      );
+    }
+
+    // O desconto sai do lucro: os itens continuam com o preco cheio.
+    const totalProfit = roundMoney(
+      items.reduce((sum, item) => sum + item.profit, 0) -
+        (discount?.amount ?? 0),
+    );
 
     const sale = await this.saleModel.create({
       ...dto,
       items,
+      tags,
+      discount: discount ?? undefined,
+      total,
       totalProfit,
       businessId: new Types.ObjectId(businessId),
       userId: user._id,
       customerId: customer?._id,
       customerName: customer?.name,
     });
+
+    // So agora a campanha consome utilizacao: a venda ja passou por todas as
+    // validacoes e existe no banco.
+    await this.campaignsService.commitUsage(businessId, preparedTags);
 
     // Monta mapa de decrementos: produtos regulares decrementam a si mesmos,
     // combos decrementam seus componentes (qtd combo × qtd item vendido)
@@ -239,6 +279,71 @@ export class SalesService {
     return sale;
   }
 
+  /**
+   * Cria a venda correspondente a uma encomenda ENTREGUE.
+   *
+   * Diferente de `create()`, NAO mexe em estoque: os itens ja foram baixados
+   * quando a encomenda foi aceita (ver `OrdersService.create`). A venda entra
+   * no caixa do dia da entrega, com o total cheio (itens + taxa) e o extrato
+   * completo de pagamentos (sinal + quitacao).
+   */
+  async createFromOrder(params: {
+    businessId: string;
+    userId: Types.ObjectId;
+    orderId: Types.ObjectId;
+    items: {
+      productId: Types.ObjectId;
+      productName: string;
+      unitPrice: number;
+      costPrice: number;
+      quantity: number;
+      subtotal: number;
+      profit: number;
+      comboComponents: {
+        productId: Types.ObjectId;
+        productName: string;
+        quantity: number;
+      }[];
+    }[];
+    deliveryFee: number;
+    total: number;
+    payments: { method: PaymentMethod; amount: number }[];
+    tags: string[];
+    /** Desconto ja concedido na encomenda — a venda so o espelha. */
+    discount?: { campaign: string; percent: number; amount: number };
+    notes?: string;
+    customerId?: Types.ObjectId;
+    customerName?: string;
+  }): Promise<SaleDocument> {
+    const totalProfit = roundMoney(
+      params.items.reduce((sum, item) => sum + item.profit, 0) -
+        (params.discount?.amount ?? 0),
+    );
+
+    const sale = await this.saleModel.create({
+      items: params.items,
+      total: params.total,
+      discount: params.discount,
+      deliveryFee: params.deliveryFee,
+      channel: SaleChannel.ENCOMENDA,
+      payments: params.payments,
+      status: SaleStatus.CONCLUIDA,
+      businessId: new Types.ObjectId(params.businessId),
+      userId: params.userId,
+      orderId: params.orderId,
+      tags: params.tags,
+      totalProfit,
+      notes: params.notes,
+      customerId: params.customerId,
+      customerName: params.customerName,
+    });
+
+    this.logger.log(
+      `Venda de encomenda criada: ${sale._id.toString()} | encomenda: ${params.orderId.toString()} | total: ${sale.total}`,
+    );
+    return sale;
+  }
+
   async findAll(
     businessId: string,
     _role: string,
@@ -249,9 +354,10 @@ export class SalesService {
       dateFrom?: string;
       dateTo?: string;
       operatorId?: string;
+      campaign?: string;
     },
   ): Promise<{ data: SaleDocument[]; total: number; totalPages: number }> {
-    const { page, limit, status, dateFrom, dateTo, operatorId } = params;
+    const { page, limit, status, dateFrom, dateTo, operatorId, campaign } = params;
     const filter: Record<string, unknown> = {
       businessId: new Types.ObjectId(businessId),
     };
@@ -263,6 +369,10 @@ export class SalesService {
 
     if (status) filter.status = status;
     if (operatorId) filter.userId = new Types.ObjectId(operatorId);
+    if (campaign) {
+      const normalized = normalizeCampaignName(campaign);
+      if (normalized) filter.tags = normalized;
+    }
 
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
@@ -293,7 +403,35 @@ export class SalesService {
     return sale;
   }
 
+  /**
+   * Cancelamento pedido pela tela de Vendas. Uma venda que nasceu de uma
+   * encomenda nao pode ser cancelada por aqui: quem controla o estoque desses
+   * itens e a encomenda (o estoque foi baixado la, na criacao), entao cancelar
+   * pelos dois lados restauraria o estoque duas vezes. O caminho e cancelar a
+   * encomenda, que por sua vez chama `cancelFromOrder`.
+   */
   async cancel(id: string, businessId: string): Promise<SaleDocument> {
+    const existing = await this.saleModel
+      .findOne({ _id: id, businessId: new Types.ObjectId(businessId) })
+      .select('orderId')
+      .exec();
+    if (existing?.orderId) {
+      throw new BadRequestException(
+        'Esta venda veio de uma encomenda. Cancele a encomenda para desfazer a venda e devolver o estoque.',
+      );
+    }
+    return this.cancelInternal(id, businessId);
+  }
+
+  /** Cancelamento disparado pelo modulo de encomendas (sem a guarda acima). */
+  async cancelFromOrder(id: string, businessId: string): Promise<SaleDocument> {
+    return this.cancelInternal(id, businessId);
+  }
+
+  private async cancelInternal(
+    id: string,
+    businessId: string,
+  ): Promise<SaleDocument> {
     const sale = await this.saleModel
       .findOneAndUpdate(
         {
@@ -310,6 +448,13 @@ export class SalesService {
         `Tentativa de cancelar venda inexistente ou já cancelada: id=${id} | negócio: ${businessId}`,
       );
       throw new NotFoundException('Venda não encontrada');
+    }
+
+    // Venda cancelada devolve a utilizacao da campanha. Quando a venda veio de
+    // uma encomenda quem devolve e o cancelamento da encomenda (que guarda as
+    // mesmas tags) — fazer os dois devolveria em dobro.
+    if (!sale.orderId) {
+      await this.campaignsService.releaseUsage(businessId, sale.tags);
     }
 
     // Restaura estoque e grava histórico
@@ -877,6 +1022,14 @@ export class SalesService {
       sale.notes = dto.notes;
     }
 
+    // Os itens de uma venda de encomenda sao espelho da encomenda (que e quem
+    // baixou o estoque) — editar por aqui deixaria os dois fora de sincronia.
+    if (dto.items && sale.orderId) {
+      throw new BadRequestException(
+        'Os itens desta venda vieram de uma encomenda. Edite a encomenda para alterá-los.',
+      );
+    }
+
     // ===== Processar atualização de itens =====
     if (dto.items && dto.items.length > 0) {
       // Buscar produtos para validação e cálculo de custos
@@ -934,13 +1087,7 @@ export class SalesService {
         };
       });
 
-      // Recalcular total e lucro total
-      const newTotal = newItems.reduce((sum, item) => sum + item.subtotal, 0);
-      const newTotalProfit = newItems.reduce((sum, item) => sum + item.profit, 0);
-
       sale.items = newItems as SaleDocument['items'];
-      sale.total = newTotal;
-      sale.totalProfit = newTotalProfit;
 
       // ===== Gerar StockMovements para ajustes de quantidade =====
       const user = await this.userModel.findOne({ firebaseUid }).exec();
@@ -1002,6 +1149,47 @@ export class SalesService {
       }
     }
 
+    // ===== Tags, desconto e totais =====
+    // Vem depois dos itens porque o desconto e percentual sobre o subtotal.
+    let discountCleared = false;
+    let preparedTags: PreparedCampaigns | null = null;
+    if (dto.items || dto.tags !== undefined) {
+      const itemsTotal = roundMoney(
+        sale.items.reduce((sum, item) => sum + item.subtotal, 0),
+      );
+
+      if (dto.tags !== undefined) {
+        // As tags que ja estavam na venda nao sao revalidadas: uma campanha
+        // que acabou ontem nao pode travar a correcao de uma venda de antes.
+        preparedTags = await this.campaignsService.prepareForDocument(
+          businessId,
+          dto.tags,
+          itemsTotal,
+          sale.tags ?? [],
+        );
+        sale.tags = preparedTags.tags;
+        discountCleared = !preparedTags.discount && !!sale.discount;
+        sale.discount = preparedTags.discount
+          ? (preparedTags.discount as SaleDocument['discount'])
+          : undefined;
+      } else if (sale.discount) {
+        // So os itens mudaram: o percentual continua, o valor acompanha.
+        sale.discount.amount = roundMoney(
+          (itemsTotal * sale.discount.percent) / 100,
+        );
+      }
+
+      // A taxa de entrega nao vem dos itens, entao precisa ser somada de volta
+      // — senao editar a venda a apagaria. O desconto incide so nos itens.
+      sale.total = roundMoney(
+        itemsTotal + (sale.deliveryFee ?? 0) - (sale.discount?.amount ?? 0),
+      );
+      sale.totalProfit = roundMoney(
+        sale.items.reduce((sum, item) => sum + item.profit, 0) -
+          (sale.discount?.amount ?? 0),
+      );
+    }
+
     // ===== Processar atualização de pagamentos =====
     if (dto.payments && dto.payments.length > 0) {
       const paymentsSum = dto.payments.reduce(
@@ -1037,7 +1225,12 @@ export class SalesService {
       total: sale.total,
       totalProfit: sale.totalProfit,
       payments: sale.payments,
+      tags: sale.tags,
     };
+
+    if (sale.discount) {
+      updateData.discount = sale.discount;
+    }
 
     if (sale.notes !== undefined) {
       updateData.notes = sale.notes;
@@ -1047,7 +1240,18 @@ export class SalesService {
       updateData.createdAt = newCreatedAt;
     }
 
-    await this.saleModel.findByIdAndUpdate(sale._id, updateData).exec();
+    await this.saleModel
+      .findByIdAndUpdate(sale._id, {
+        $set: updateData,
+        // Tirar a ultima campaign com desconto tem que apagar o campo, nao deixar
+        // o valor antigo para tras.
+        ...(discountCleared ? { $unset: { discount: '' } } : {}),
+      })
+      .exec();
+
+    if (preparedTags) {
+      await this.campaignsService.commitUsage(businessId, preparedTags);
+    }
 
     this.logger.log(
       `Venda atualizada: ${id} | negócio: ${businessId} | novo total: ${sale.total}`,

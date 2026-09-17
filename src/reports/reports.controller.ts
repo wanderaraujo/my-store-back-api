@@ -14,8 +14,9 @@ export class ReportsController {
     @CurrentUser() user: any,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getOverview(user.businessId, dateFrom, dateTo);
+    return this.reportsService.getOverview(user.businessId, dateFrom, dateTo, campaign);
   }
 
   @Get('period-comparison')
@@ -23,8 +24,9 @@ export class ReportsController {
     @CurrentUser() user: any,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getPeriodComparison(user.businessId, dateFrom, dateTo);
+    return this.reportsService.getPeriodComparison(user.businessId, dateFrom, dateTo, campaign);
   }
 
   @Get('sales-by-period')
@@ -33,8 +35,15 @@ export class ReportsController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('groupBy') groupBy?: 'day' | 'week' | 'month',
+    @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getSalesByPeriod(user.businessId, dateFrom, dateTo, groupBy ?? 'day');
+    return this.reportsService.getSalesByPeriod(
+      user.businessId,
+      dateFrom,
+      dateTo,
+      groupBy ?? 'day',
+      campaign,
+    );
   }
 
   @Get('top-products')
@@ -43,12 +52,14 @@ export class ReportsController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('limit') limit?: string,
+    @Query('campaign') campaign?: string,
   ) {
     return this.reportsService.getTopProducts(
       user.businessId,
       dateFrom,
       dateTo,
       limit ? parseInt(limit) : 10,
+      campaign,
     );
   }
 
@@ -57,8 +68,9 @@ export class ReportsController {
     @CurrentUser() user: any,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getABCCurve(user.businessId, dateFrom, dateTo);
+    return this.reportsService.getABCCurve(user.businessId, dateFrom, dateTo, campaign);
   }
 
   @Get('waste')
@@ -93,7 +105,8 @@ export class ReportsController {
     @CurrentUser() user: any,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getByChannel(user.businessId, dateFrom, dateTo);
+    return this.reportsService.getByChannel(user.businessId, dateFrom, dateTo, campaign);
   }
 }

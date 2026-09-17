@@ -15,6 +15,10 @@ export class UpdateCustomerDto {
 
   @IsOptional()
   @IsString()
+  address?: string;
+
+  @IsOptional()
+  @IsString()
   notes?: string;
 
   @IsOptional()

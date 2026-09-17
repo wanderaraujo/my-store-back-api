@@ -17,6 +17,7 @@ export interface InternalMovementPayload {
   quantity: number;
   reason?: string;
   saleId?: Types.ObjectId;
+  orderId?: Types.ObjectId;
 }
 
 @Injectable()
@@ -110,6 +111,7 @@ export class StockMovementsService {
       quantity: payload.quantity,
       reason: payload.reason,
       saleId: payload.saleId,
+      orderId: payload.orderId,
       previousStock,
       newStock,
     });

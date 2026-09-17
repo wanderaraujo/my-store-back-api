@@ -88,4 +88,11 @@ export class CreateSaleDto {
   @IsOptional()
   @IsMongoId()
   customerId?: string;
+
+  /** Campanhas aplicadas (#NATAL2025). Normalizadas no service. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  tags?: string[];
 }
